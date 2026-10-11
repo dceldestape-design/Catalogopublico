@@ -41,7 +41,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 });
 
 /**
- * Carga Local-First: primero LocalStorage, luego catálogo base precargado.
+ * Carga Local-First: lee únicamente del almacenamiento local guardado.
  */
 function loadCatalogOfflineFirst() {
   const empty = document.getElementById('cc-empty');
@@ -49,7 +49,7 @@ function loadCatalogOfflineFirst() {
 
   let data = null;
 
-  // 1. Almacenamiento local del navegador
+  // Almacenamiento local del navegador
   try {
     const cached = localStorage.getItem('cc_catalog_' + state.vendor);
     if (cached) {
@@ -57,11 +57,6 @@ function loadCatalogOfflineFirst() {
     }
   } catch (e) {
     console.warn("Error leyendo cc_catalog:", e);
-  }
-
-  // 2. Fallback a catálogo inicial precargado (bundle público seguro)
-  if (!data && (window.CC_INITIAL_CATALOG || window.DISTCASTRO_PUBLIC_CATALOG)) {
-    data = window.CC_INITIAL_CATALOG || window.DISTCASTRO_PUBLIC_CATALOG;
   }
 
   if (data && data.products && data.products.length > 0) {
@@ -75,8 +70,12 @@ function loadCatalogOfflineFirst() {
     return true;
   }
 
-  // Si no hay datos en caché ni bundle (caso muy raro), intentar carga
-  if (loading) loading.classList.remove('hidden');
+  // Si no hay datos en caché, mostrar estado vacío / cargando según corresponda
+  if (empty) {
+    const msg = document.getElementById('cc-empty-msg');
+    if (msg) msg.textContent = "No hay productos disponibles en caché local. Conéctate para sincronizar.";
+    empty.classList.remove('hidden');
+  }
   return false;
 }
 

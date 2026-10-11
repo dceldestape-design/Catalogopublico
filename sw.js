@@ -2,12 +2,11 @@
  * Catálogo Cliente DHC4 - Service Worker
  * 100% Offline: Shell, datos base, estilos, CDNs y fotos en caché local.
  */
-const CACHE_NAME = 'cat-cliente-dhc4-v1.0';
+const CACHE_NAME = 'cat-cliente-dhc4-v2.0';
 const ASSETS_TO_CACHE = [
   './index.html',
   './styles.css',
   './config.js',
-  './public_catalog_data.js',
   './app.js',
   './manifest.json',
   './logo.png',
