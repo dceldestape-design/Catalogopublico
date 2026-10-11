@@ -4,6 +4,15 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
   <title>Catálogo | Distribuciones Castro</title>
+  
+  <!-- PWA Manifest & Meta Tags -->
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#2563eb">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="apple-touch-icon" href="./logo.png">
+
+  <!-- Estilos & CDNs cacheados offline -->
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
   <link rel="stylesheet" href="styles.css">
@@ -12,29 +21,35 @@
 
   <header class="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-xs">
     <div class="max-w-5xl mx-auto px-3 sm:px-6 py-2.5 flex items-center gap-2.5">
-      <img id="cc-logo" src="" alt="" class="hidden w-11 h-11 rounded-xl object-cover shadow-md">
+      <img id="cc-logo" src="./logo.png" alt="Logo" class="w-11 h-11 rounded-xl object-cover shadow-md">
       <div class="min-w-0 flex-1">
-        <h1 id="cc-company" class="text-sm font-extrabold text-slate-900 leading-tight truncate">Catálogo</h1>
+        <h1 id="cc-company" class="text-sm font-extrabold text-slate-900 leading-tight truncate">Distribuciones Castro</h1>
         <p id="cc-seller" class="text-[11px] text-slate-500 truncate"></p>
       </div>
-      <button onclick="toggleCart(true)" class="relative h-11 px-3.5 flex items-center gap-2 rounded-xl bg-emerald-600 active:bg-emerald-700 text-white transition touch-manipulation">
+
+      <!-- Botón de actualización manual (sin forzar descarga al abrir) -->
+      <button id="btn-refresh-catalog" onclick="refreshCatalogManually()" title="Actualizar catálogo si hay internet" class="w-10 h-10 flex items-center justify-center rounded-xl bg-slate-100 active:bg-slate-200 text-slate-600 transition touch-manipulation shrink-0">
+        <i id="icon-refresh" class="fa-solid fa-arrows-rotate text-sm"></i>
+      </button>
+
+      <button onclick="toggleCart(true)" class="relative h-10 px-3.5 flex items-center gap-2 rounded-xl bg-emerald-600 active:bg-emerald-700 text-white transition touch-manipulation shrink-0">
         <i class="fa-solid fa-cart-shopping text-sm"></i>
         <span id="cart-count" class="text-xs font-bold">0</span>
       </button>
     </div>
     <div class="max-w-5xl mx-auto px-3 sm:px-6 pb-2.5">
       <div class="relative">
-        <i class="fa-solid fa-magnifying-glass absolute left-4 top-4 text-slate-400 text-sm"></i>
-        <input type="text" id="cc-search" oninput="renderGrid()" placeholder="Buscar producto..." class="w-full pl-11 pr-4 py-3.5 text-base rounded-2xl bg-slate-100 border border-transparent focus:border-blue-500 focus:bg-white focus:outline-none transition">
+        <i class="fa-solid fa-magnifying-glass absolute left-4 top-3.5 text-slate-400 text-sm"></i>
+        <input type="text" id="cc-search" oninput="renderGrid()" placeholder="Buscar producto por nombre o código..." class="w-full pl-11 pr-4 py-2.5 text-sm sm:text-base rounded-2xl bg-slate-100 border border-transparent focus:border-blue-500 focus:bg-white focus:outline-none transition">
       </div>
     </div>
   </header>
 
   <main class="max-w-5xl mx-auto px-3 sm:px-6 pt-4 pb-28 flex-1 w-full">
     <div id="cc-headline" class="text-sm text-slate-600 mb-3"></div>
-    <div id="cc-loading" class="text-center py-16 px-4">
+    <div id="cc-loading" class="hidden text-center py-16 px-4">
       <i class="fa-solid fa-spinner fa-spin text-2xl text-blue-600"></i>
-      <p class="text-xs text-slate-500 mt-3">Descargando catálogo e imágenes...</p>
+      <p class="text-xs text-slate-500 mt-3">Cargando catálogo...</p>
     </div>
     <div id="cc-empty" class="hidden text-center py-16 px-4 bg-white rounded-3xl border border-slate-200 max-w-md mx-auto my-8">
       <div class="w-16 h-16 rounded-2xl bg-amber-50 text-amber-500 flex items-center justify-center text-2xl mx-auto mb-3">
@@ -47,15 +62,24 @@
   </main>
 
   <!-- Offer Modal -->
-  <div id="cc-offer" class="hidden fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-end sm:items-center justify-center sm:p-4">
-    <div class="bg-white rounded-t-3xl sm:rounded-2xl w-full max-w-md overflow-hidden shadow-2xl">
-      <img id="cc-offer-image" src="" alt="Oferta" class="w-full h-44 object-cover">
-      <div class="p-5">
-        <h3 id="cc-offer-title" class="text-base font-extrabold text-slate-900"></h3>
-        <div class="mt-4 flex gap-2">
-          <button onclick="closeOffer()" class="flex-1 py-2.5 bg-slate-100 text-slate-600 rounded-xl text-sm font-bold">Cerrar</button>
-          <button id="cc-offer-cta" onclick="closeOffer()" class="flex-1 py-2.5 bg-blue-600 text-white rounded-xl text-sm font-bold">Ver productos</button>
-        </div>
+  <div id="cc-offer" onclick="if(event.target===this)closeOffer()" class="hidden fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 transition-all duration-300">
+    <div class="relative bg-white rounded-3xl w-full max-w-sm sm:max-w-md overflow-hidden shadow-2xl flex flex-col max-h-[90vh] animate-in fade-in zoom-in-95 duration-200">
+      <!-- Botón flotante para cerrar fácilmente -->
+      <button onclick="closeOffer()" aria-label="Cerrar oferta" class="absolute top-3 right-3 z-10 w-9 h-9 rounded-full bg-black/50 text-white hover:bg-black/70 flex items-center justify-center transition shadow-md">
+        <i class="fa-solid fa-xmark text-base"></i>
+      </button>
+
+      <!-- Imagen promocional con contenedor flexible -->
+      <div class="relative bg-slate-900 flex items-center justify-center overflow-hidden max-h-[62vh]">
+        <img id="cc-offer-image" src="" alt="Oferta especial" class="w-full h-auto max-h-[62vh] object-contain block">
+      </div>
+
+      <!-- Pie de la oferta -->
+      <div class="p-4 sm:p-5 bg-white border-t border-slate-100 flex flex-col gap-3">
+        <h3 id="cc-offer-title" class="text-base font-extrabold text-slate-900 text-center leading-snug">Oferta especial</h3>
+        <button id="cc-offer-cta" onclick="closeOffer()" class="w-full py-3 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white rounded-xl text-sm font-bold shadow-sm transition">
+          Ver productos
+        </button>
       </div>
     </div>
   </div>
@@ -77,6 +101,8 @@
     </div>
   </div>
 
+  <!-- Datos base offline y lógica de la aplicación -->
+  <script src="public_catalog_data.js"></script>
   <script src="config.js"></script>
   <script src="app.js"></script>
 </body>

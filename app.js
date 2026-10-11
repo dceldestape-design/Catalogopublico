@@ -1,51 +1,140 @@
 /**
- * Catálogo cliente por vendedor: sin precios, con consulta por WhatsApp.
- * Lee ?v=CODIGO&gs=URL_EXEC del GS público del vendedor.
+ * Catálogo Cliente DHC4 - 100% Offline Engine
+ * Carga de datos local-first sin descargas bloqueantes al iniciar.
  */
-const state = { catalog: null, cart: {}, gsUrl: "", vendor: "" };
+const state = { catalog: null, cart: {}, gsUrl: "", vendor: "", isSyncing: false };
+
+// Registro de Service Worker para PWA Offline (solo en http/https)
+if ('serviceWorker' in navigator && (window.location.protocol === 'http:' || window.location.protocol === 'https:')) {
+  navigator.serviceWorker.register('./sw.js')
+    .then(() => console.log('SW Catálogo Cliente DHC4 activo (modo offline habilitado).'))
+    .catch((err) => console.log('SW error:', err));
+}
 
 document.addEventListener('DOMContentLoaded', async () => {
   const q = new URLSearchParams(window.location.search);
-  state.vendor = (q.get('v') || window.CC_VENDOR || "").trim().toUpperCase();
+  state.vendor = (q.get('v') || window.CC_VENDOR || "DHC4").trim().toUpperCase();
   state.gsUrl = (q.get('gs') || window.CC_GSURL || "").trim();
+
   // Enlaces viejos sin gs: reutilizar el último GS usado por este vendedor
   if (!state.gsUrl && state.vendor) {
     try { state.gsUrl = localStorage.getItem('cc_gs_' + state.vendor) || ""; } catch (e) {}
   }
+
+  // Restaurar carrito guardado
   try {
     const raw = localStorage.getItem('cc_cart_' + state.vendor);
     if (raw) state.cart = JSON.parse(raw) || {};
   } catch (e) {}
-  await loadCatalog();
+
+  // 1. CARGA INMEDIATA OFFLINE (0 ms de espera)
+  loadCatalogOfflineFirst();
+
+  // 2. Consulta en segundo plano si hay conexión (no bloquea al usuario)
+  if (navigator.onLine && state.gsUrl) {
+    syncCatalogInBackground();
+  }
+
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') { toggleCart(false); closeOffer(); }
   });
 });
 
-async function loadCatalog() {
+/**
+ * Carga Local-First: primero LocalStorage, luego catálogo base precargado.
+ */
+function loadCatalogOfflineFirst() {
   const empty = document.getElementById('cc-empty');
-  const msg = document.getElementById('cc-empty-msg');
-  if (!state.gsUrl) {
-    if (msg) msg.textContent = "Enlace incompleto: falta la dirección del catálogo.";
-    if (empty) empty.classList.remove('hidden');
-    return;
+  const loading = document.getElementById('cc-loading');
+
+  let data = null;
+
+  // 1. Almacenamiento local del navegador
+  try {
+    const cached = localStorage.getItem('cc_catalog_' + state.vendor);
+    if (cached) {
+      data = JSON.parse(cached);
+    }
+  } catch (e) {
+    console.warn("Error leyendo cc_catalog:", e);
   }
+
+  // 2. Fallback a catálogo inicial precargado (bundle público seguro)
+  if (!data && (window.CC_INITIAL_CATALOG || window.DISTCASTRO_PUBLIC_CATALOG)) {
+    data = window.CC_INITIAL_CATALOG || window.DISTCASTRO_PUBLIC_CATALOG;
+  }
+
+  if (data && data.products && data.products.length > 0) {
+    state.catalog = data;
+    if (loading) loading.classList.add('hidden');
+    if (empty) empty.classList.add('hidden');
+    applyBrand();
+    renderGrid();
+    updateCartBadge();
+    maybeOffer();
+    return true;
+  }
+
+  // Si no hay datos en caché ni bundle (caso muy raro), intentar carga
+  if (loading) loading.classList.remove('hidden');
+  return false;
+}
+
+/**
+ * Sincronización en segundo plano: no bloquea ni muestra spinners en la vista principal
+ */
+async function syncCatalogInBackground() {
+  if (state.isSyncing || !state.gsUrl || !state.vendor) return;
+  state.isSyncing = true;
+
   try {
     const res = await fetch(`${state.gsUrl}?action=get_public&v=${encodeURIComponent(state.vendor)}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const json = await res.json();
     if (json.status !== "success" || !json.public) throw new Error((json && json.message) || "Sin respuesta");
+
     state.catalog = json.public;
-    try { if (state.vendor) localStorage.setItem('cc_gs_' + state.vendor, state.gsUrl); } catch (e) {}
+    try {
+      localStorage.setItem('cc_catalog_' + state.vendor, JSON.stringify(json.public));
+      localStorage.setItem('cc_gs_' + state.vendor, state.gsUrl);
+    } catch (e) {}
+
     document.getElementById('cc-loading')?.classList.add('hidden');
     applyBrand();
     renderGrid();
     updateCartBadge();
     maybeOffer();
   } catch (e) {
-    console.warn("catalogo-cliente:", e);
+    // Si falla en background o no hay internet, no pasa nada porque ya tenemos datos offline
+    console.log("Catálogo en modo local / offline:", e.message || e);
     document.getElementById('cc-loading')?.classList.add('hidden');
-    if (msg) msg.textContent = "No se pudo cargar. Revisa tu conexión e intenta de nuevo.";
-    if (empty) empty.classList.remove('hidden');
+    if (!state.catalog || !state.catalog.products || !state.catalog.products.length) {
+      const msg = document.getElementById('cc-empty-msg');
+      if (msg) msg.textContent = "Catálogo listo para operar offline. Conéctate una vez si requieres actualizar.";
+      document.getElementById('cc-empty')?.classList.remove('hidden');
+    }
+  } finally {
+    state.isSyncing = false;
+  }
+}
+
+/**
+ * Actualización manual al presionar el botón del encabezado
+ */
+async function refreshCatalogManually() {
+  const icon = document.getElementById('icon-refresh');
+  if (icon) icon.classList.add('fa-spin');
+
+  if (!navigator.onLine) {
+    alert("Estás sin conexión a internet. Mostrando catálogo guardado en este dispositivo.");
+    if (icon) icon.classList.remove('fa-spin');
+    return;
+  }
+
+  try {
+    await syncCatalogInBackground();
+  } finally {
+    if (icon) icon.classList.remove('fa-spin');
   }
 }
 
@@ -53,24 +142,57 @@ function applyBrand() {
   const c = state.catalog || {};
   const company = c.company || {};
   const seller = c.seller || {};
+  const offer = c.offer || {};
   document.title = `${company.name || 'Catálogo'}${seller.name ? ' • ' + seller.name : ''}`;
+  
   const co = document.getElementById('cc-company');
-  if (co) co.textContent = company.name || 'Catálogo';
+  if (co) co.textContent = company.name || 'Distribuciones Castro';
+  
   const se = document.getElementById('cc-seller');
-  if (se) se.textContent = [seller.name, seller.code ? 'Cód. ' + seller.code : ''].filter(Boolean).join(' • ');
+  if (se) {
+    const label = [seller.name, seller.code ? 'Cód. ' + seller.code : ''].filter(Boolean).join(' • ');
+    se.textContent = label || 'Catálogo Digital';
+  }
+  
   const logo = document.getElementById('cc-logo');
   if (logo) {
     if (company.logo) {
       logo.src = company.logo;
-      logo.classList.remove('hidden');
     } else {
-      logo.classList.add('hidden');
+      logo.src = './logo.png';
     }
   }
+  
   const hl = document.getElementById('cc-headline');
-  if (hl) hl.textContent = seller.headline || '';
+  if (hl) {
+    let html = seller.headline ? `<span>${seller.headline}</span>` : '';
+    if (offer && offer.enabled && offer.image) {
+      html += `
+        <button onclick="openOffer()" class="inline-flex items-center gap-1.5 ml-2 px-2.5 py-1 rounded-lg bg-amber-500/10 text-amber-600 text-xs font-bold hover:bg-amber-500/20 active:scale-95 transition">
+          <i class="fa-solid fa-fire text-amber-500"></i> Ver oferta
+        </button>`;
+    }
+    hl.innerHTML = html;
+  }
+  
   const send = document.getElementById('cc-send-label');
   if (send && seller.name) send.textContent = `Enviar a ${seller.name} por WhatsApp`;
+}
+
+function openOffer() {
+  const offer = state.catalog && state.catalog.offer;
+  if (!offer || !offer.image) return;
+  const modal = document.getElementById('cc-offer');
+  const img = document.getElementById('cc-offer-image');
+  const t = document.getElementById('cc-offer-title');
+  const cta = document.getElementById('cc-offer-cta');
+  if (img) img.src = offer.image;
+  if (t) t.textContent = offer.title || 'Oferta especial';
+  if (cta) cta.textContent = offer.cta || 'Ver productos';
+  if (modal) {
+    modal.classList.remove('hidden');
+    document.body.style.overflow = 'hidden';
+  }
 }
 
 function renderGrid() {
@@ -94,7 +216,7 @@ function renderGrid() {
     return `
     <div class="bg-white rounded-2xl border border-slate-200/80 shadow-xs flex flex-col overflow-hidden">
       <div class="w-full aspect-square bg-slate-50 border-b border-slate-100 flex items-center justify-center overflow-hidden">
-        ${p.image ? `<img src="${p.image}" alt="${p.name}" loading="lazy" class="w-full h-full object-contain p-2">` : `<i class="fa-solid fa-box text-3xl text-slate-300"></i>`}
+        ${p.image ? `<img src="${p.image}" alt="${p.name}" loading="lazy" onerror="this.outerHTML='<i class=\\\'fa-solid fa-box text-3xl text-slate-300\\\'></i>'" class="w-full h-full object-contain p-2">` : `<i class="fa-solid fa-box text-3xl text-slate-300"></i>`}
       </div>
       <div class="p-3 flex-1 flex flex-col">
         <span class="text-[10px] font-bold text-blue-700">#${p.code}</span>
@@ -107,7 +229,7 @@ function renderGrid() {
             <span class="text-sm font-extrabold w-5 text-center">${qty}</span>
             <button onclick="changeQty('${p.code}', 1)" class="w-9 h-9 rounded-lg bg-slate-100 text-slate-700 font-bold">+</button>
           </div>` : `
-          <button onclick="changeQty('${p.code}', 1)" class="px-3 py-2 rounded-lg bg-blue-600 text-white text-xs font-bold">Agregar</button>`}
+          <button onclick="changeQty('${p.code}', 1)" class="px-3 py-2 rounded-lg bg-blue-600 active:bg-blue-700 text-white text-xs font-bold w-full text-center">Agregar</button>`}
         </div>
       </div>
     </div>`;
@@ -151,7 +273,7 @@ function renderCart() {
   box.innerHTML = entries.map(({ p, qty }) => `
     <div class="p-3 flex items-center gap-3">
       <div class="w-12 h-12 rounded-lg bg-slate-50 overflow-hidden shrink-0 flex items-center justify-center">
-        ${p.image ? `<img src="${p.image}" class="w-full h-full object-contain">` : `<i class="fa-solid fa-box text-slate-300"></i>`}
+        ${p.image ? `<img src="${p.image}" onerror="this.outerHTML='<i class=\\\'fa-solid fa-box text-slate-300\\\'></i>'" class="w-full h-full object-contain">` : `<i class="fa-solid fa-box text-slate-300"></i>`}
       </div>
       <div class="flex-1 min-w-0">
         <div class="text-xs font-bold text-slate-900 truncate">${p.name}</div>
@@ -188,20 +310,43 @@ function sendOrder() {
 function maybeOffer() {
   const offer = state.catalog && state.catalog.offer;
   if (!offer || !offer.enabled || !offer.image) return;
-  const key = `cc_offer_${state.vendor}_${offer.image}`;
-  try {
-    if (localStorage.getItem(key)) return;
-    localStorage.setItem(key, "1");
-  } catch (e) {}
+
+  // Validación de vigencia de fechas si están definidas
+  const todayStr = new Date().toISOString().slice(0, 10);
+  if (offer.start && todayStr < offer.start) return;
+  if (offer.end && todayStr > offer.end) return;
+
+  // Evitar reabrirlo en la misma sesión si el usuario ya lo cerró
+  if (sessionStorage.getItem(`cc_offer_closed_${state.vendor}`)) return;
+
+  const modal = document.getElementById('cc-offer');
   const img = document.getElementById('cc-offer-image');
-  if (img) img.src = offer.image;
   const t = document.getElementById('cc-offer-title');
-  if (t) t.textContent = offer.title || 'Oferta especial';
   const cta = document.getElementById('cc-offer-cta');
+
+  if (img) {
+    img.src = offer.image;
+    img.onerror = () => {
+      // Si la URL de la imagen falla o no carga, ocultar el modal para no bloquear al usuario
+      if (modal) modal.classList.add('hidden');
+    };
+  }
+  if (t) t.textContent = offer.title || 'Oferta especial';
   if (cta) cta.textContent = offer.cta || 'Ver productos';
-  document.getElementById('cc-offer')?.classList.remove('hidden');
+
+  if (modal) {
+    modal.classList.remove('hidden');
+    // Prevenir scroll en el fondo mientras el modal está abierto
+    document.body.style.overflow = 'hidden';
+  }
 }
 
 function closeOffer() {
-  document.getElementById('cc-offer')?.classList.add('hidden');
+  const modal = document.getElementById('cc-offer');
+  if (modal) modal.classList.add('hidden');
+  document.body.style.overflow = '';
+  // Marcar como cerrado en esta sesión para no ser molesto al navegar
+  try {
+    sessionStorage.setItem(`cc_offer_closed_${state.vendor}`, "1");
+  } catch (e) {}
 }
